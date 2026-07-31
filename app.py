@@ -262,6 +262,75 @@ def save_new(index, file_bytes, filename, selected_date, df, replace=False):
     st.cache_data.clear()
 
 
+
+def render_comparison(comp, old_date, new_date, accumulated=False):
+    old_label = datetime.fromisoformat(old_date).strftime('%d/%m/%Y')
+    new_label = datetime.fromisoformat(new_date).strftime('%d/%m/%Y')
+    title = f"{old_label} vs. {new_label}"
+    if accumulated:
+        title += " · Variación acumulada"
+    st.subheader(title)
+
+    inc = comp[comp.tipo == 'Aumento']
+    metrics = [
+        ('Sin cambios', (comp.tipo == 'Sin cambio').sum()),
+        ('Aumentos', len(inc)),
+        ('Bajas', (comp.tipo == 'Baja').sum()),
+        ('Agregados', (comp.tipo == 'Agregado').sum()),
+        ('Retirados', (comp.tipo == 'Retirado').sum()),
+    ]
+    for col, (label, val) in zip(st.columns(5), metrics):
+        col.metric(label, int(val))
+
+    zero_count = int((comp.tipo == 'De $0 a precio').sum())
+    rename_count = int((comp.tipo == 'Cambio de nombre').sum())
+    avg = inc.variacion_pct.mean() if len(inc) else 0
+    med = inc.variacion_pct.median() if len(inc) else 0
+    st.write(
+        f"**Aumento promedio:** {avg:.2%} · "
+        f"**Mediana:** {med:.2%} · "
+        f"**De $0 a precio:** {zero_count} · "
+        f"**Cambios de nombre:** {rename_count}"
+    )
+
+    a, b = st.columns(2)
+    for target, heading, frame in [
+        (a, 'Mayores aumentos', inc.nlargest(10, 'variacion_pct')),
+        (b, 'Menores aumentos', inc.nsmallest(10, 'variacion_pct')),
+    ]:
+        with target:
+            st.markdown(f'#### {heading}')
+            if len(frame):
+                st.dataframe(
+                    frame[['codigo','producto','precio_anterior','precio_actual','variacion_pct']],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info('No hubo aumentos en esta comparación.')
+
+    for heading, kind in [
+        ('Productos que bajaron', 'Baja'),
+        ('Productos agregados', 'Agregado'),
+        ('Productos retirados', 'Retirado'),
+        ('Pasaron de $0 a precio', 'De $0 a precio'),
+        ('Cambios de nombre', 'Cambio de nombre'),
+    ]:
+        sub = comp[comp.tipo == kind]
+        with st.expander(f'{heading} ({len(sub)})'):
+            if len(sub):
+                st.dataframe(sub, use_container_width=True, hide_index=True)
+            else:
+                st.caption('No hubo casos en esta comparación.')
+
+    st.download_button(
+        'Descargar Excel comparativo',
+        report_excel(comp, old_date, new_date),
+        f'comparativo_{old_date}_vs_{new_date}.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        key=f'download_{old_date}_{new_date}_{"acc" if accumulated else "last"}',
+    )
+
 st.title('📈 Historial de Listas de Precios')
 st.caption('Carga, guarda y compara listas usando el código del producto.')
 if USE_GITHUB:
@@ -309,41 +378,66 @@ with tabs[1]:
         st.info('Se necesitan al menos dos listas.')
     else:
         old_meta, new_meta = lists[-2], lists[-1]
-        comp = compare_lists(load_normalized(old_meta['archivo_normalizado']), load_normalized(new_meta['archivo_normalizado']))
-        st.subheader(f"{datetime.fromisoformat(old_meta['fecha']).strftime('%d/%m/%Y')} vs. {datetime.fromisoformat(new_meta['fecha']).strftime('%d/%m/%Y')}")
-        inc = comp[comp.tipo=='Aumento']
-        metrics = [('Sin cambios',(comp.tipo=='Sin cambio').sum()),('Aumentos',len(inc)),('Bajas',(comp.tipo=='Baja').sum()),('Agregados',(comp.tipo=='Agregado').sum()),('Retirados',(comp.tipo=='Retirado').sum())]
-        for col, (label, val) in zip(st.columns(5), metrics): col.metric(label, int(val))
-        st.write(f"**Aumento promedio:** {inc.variacion_pct.mean() if len(inc) else 0:.2%} · **Mediana:** {inc.variacion_pct.median() if len(inc) else 0:.2%}")
-        a,b = st.columns(2)
-        for target, title, frame in [(a,'Mayores aumentos',inc.nlargest(10,'variacion_pct')),(b,'Menores aumentos',inc.nsmallest(10,'variacion_pct'))]:
-            with target:
-                st.markdown(f'#### {title}')
-                st.dataframe(frame[['codigo','producto','precio_anterior','precio_actual','variacion_pct']], use_container_width=True, hide_index=True)
-        for title, kind in [('Productos que bajaron','Baja'),('Productos agregados','Agregado'),('Productos retirados','Retirado'),('Pasaron de $0 a precio','De $0 a precio'),('Cambios de nombre','Cambio de nombre')]:
-            sub = comp[comp.tipo==kind]
-            with st.expander(f'{title} ({len(sub)})'): st.dataframe(sub, use_container_width=True, hide_index=True)
-        st.download_button('Descargar Excel comparativo', report_excel(comp, old_meta['fecha'], new_meta['fecha']), f"comparativo_{old_meta['fecha']}_vs_{new_meta['fecha']}.xlsx", 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        comp = compare_lists(
+            load_normalized(old_meta['archivo_normalizado']),
+            load_normalized(new_meta['archivo_normalizado'])
+        )
+        render_comparison(comp, old_meta['fecha'], new_meta['fecha'], accumulated=False)
 
 with tabs[2]:
     index = load_index(); lists = sorted_lists(index)
-    if not lists: st.info('Todavía no hay listas.')
+    if not lists:
+        st.info('Todavía no hay listas.')
     else:
         hist = pd.DataFrame(lists)
         hist['fecha'] = pd.to_datetime(hist['fecha']).dt.strftime('%d/%m/%Y')
         hist['cargado_el'] = pd.to_datetime(hist['cargado_el']).dt.strftime('%d/%m/%Y %H:%M')
-        st.dataframe(hist[['fecha','productos','nombre_original','cargado_el']].rename(columns={'fecha':'Fecha','productos':'Productos','nombre_original':'Archivo','cargado_el':'Cargado'}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            hist[['fecha','productos','nombre_original','cargado_el']].rename(
+                columns={
+                    'fecha':'Fecha',
+                    'productos':'Productos',
+                    'nombre_original':'Archivo',
+                    'cargado_el':'Cargado'
+                }
+            ),
+            use_container_width=True,
+            hide_index=True
+        )
         st.markdown('#### Comparar dos fechas')
         dates = [x['fecha'] for x in lists]
         if len(dates) >= 2:
-            c1,c2 = st.columns(2)
-            old_date = c1.selectbox('Lista anterior', dates[:-1], format_func=lambda x: datetime.fromisoformat(x).strftime('%d/%m/%Y'))
+            c1, c2 = st.columns(2)
+            old_date = c1.selectbox(
+                'Lista anterior',
+                dates[:-1],
+                format_func=lambda x: datetime.fromisoformat(x).strftime('%d/%m/%Y')
+            )
             valid = [x for x in dates if x > old_date]
-            new_date = c2.selectbox('Lista nueva', valid, format_func=lambda x: datetime.fromisoformat(x).strftime('%d/%m/%Y'))
-            if st.button('Comparar fechas seleccionadas'):
-                comp = compare_lists(load_normalized(by_date(index,old_date)['archivo_normalizado']), load_normalized(by_date(index,new_date)['archivo_normalizado']))
-                st.dataframe(comp[comp.tipo!='Sin cambio'], use_container_width=True, hide_index=True)
-                st.download_button('Descargar esta comparación', report_excel(comp,old_date,new_date), f'comparativo_{old_date}_vs_{new_date}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            new_date = c2.selectbox(
+                'Lista nueva',
+                valid,
+                format_func=lambda x: datetime.fromisoformat(x).strftime('%d/%m/%Y')
+            )
+            if st.button('Comparar fechas seleccionadas', type='primary'):
+                st.session_state['history_comparison'] = (old_date, new_date)
+
+            selected_pair = st.session_state.get('history_comparison')
+            if selected_pair:
+                selected_old, selected_new = selected_pair
+                old_item = by_date(index, selected_old)
+                new_item = by_date(index, selected_new)
+                if old_item and new_item:
+                    comp = compare_lists(
+                        load_normalized(old_item['archivo_normalizado']),
+                        load_normalized(new_item['archivo_normalizado'])
+                    )
+                    old_pos = dates.index(selected_old)
+                    new_pos = dates.index(selected_new)
+                    accumulated = (new_pos - old_pos) > 1
+                    render_comparison(
+                        comp, selected_old, selected_new, accumulated=accumulated
+                    )
 
 with tabs[3]:
     index = load_index(); lists = sorted_lists(index)
