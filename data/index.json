@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "listas": [
+    {
+      "fecha": "2026-07-07",
+      "archivo_original": "data/listas/lista_2026-07-07.xls",
+      "archivo_normalizado": "data/normalizados/lista_2026-07-07.csv",
+      "nombre_original": "lista_2026-07-07.xls",
+      "productos": 1270,
+      "sha256": "e6b4132cba244dc78c94ebddd85378766efb16d59b9395d059a0895e52aa85e0",
+      "cargado_el": "2026-07-07T12:00:00"
+    },
+    {
+      "fecha": "2026-07-16",
+      "archivo_original": "data/listas/lista_2026-07-16.xls",
+      "archivo_normalizado": "data/normalizados/lista_2026-07-16.csv",
+      "nombre_original": "lista_2026-07-16.xls",
+      "productos": 1278,
+      "sha256": "5e92586b5caea08c9e9c43ed636d6663b9000f88731f69fbc3b6bd82ef436120",
+      "cargado_el": "2026-07-16T12:00:00"
+    }
+  ]
+}
