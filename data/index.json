@@ -18,6 +18,15 @@
       "productos": 1278,
       "sha256": "5e92586b5caea08c9e9c43ed636d6663b9000f88731f69fbc3b6bd82ef436120",
       "cargado_el": "2026-07-16T12:00:00"
+    },
+    {
+      "fecha": "2026-07-24",
+      "archivo_original": "data/listas/lista_2026-07-24.xls",
+      "archivo_normalizado": "data/normalizados/lista_2026-07-24.csv",
+      "nombre_original": "exclusiva 30-07-26.xls",
+      "productos": 1279,
+      "sha256": "7dbfdd8ebc913e218a8f9138ccd48bee84f343cfc0b0fee9efb3fa7cb69b5a31",
+      "cargado_el": "2026-07-31T16:29:09"
     }
   ]
 }
