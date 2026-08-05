@@ -13,6 +13,7 @@ import streamlit as st
 st.set_page_config(page_title='Historial de precios', page_icon='📈', layout='wide')
 ROOT = Path(__file__).parent
 INDEX_PATH = 'data/index.json'
+BRANDS_PATH = 'data/marcas.json'
 
 
 def secret(name, default=None):
@@ -81,11 +82,11 @@ def save_index(index):
     save_bytes(INDEX_PATH, json.dumps(index, ensure_ascii=False, indent=2).encode(), 'Actualizar historial')
 
 
-def require_admin():
+def require_admin(scope='main'):
     if not APP_PIN or st.session_state.get('admin_ok'):
         return True
-    pin = st.text_input('PIN de administrador', type='password')
-    if st.button('Ingresar', type='primary'):
+    pin = st.text_input('PIN de administrador', type='password', key=f'admin_pin_{scope}')
+    if st.button('Ingresar', type='primary', key=f'admin_login_{scope}'):
         if pin == APP_PIN:
             st.session_state.admin_ok = True
             st.rerun()
@@ -180,6 +181,118 @@ def detect_date(filename, preview):
     return date.today()
 
 
+
+DEFAULT_BRAND_ALIASES = {
+    'STAR NUTRITION': 'Star Nutrition',
+    'ENA SPORT': 'ENA',
+    'ENA': 'ENA',
+    'GENTECH': 'Gentech',
+    'UNIVERSAL': 'Universal',
+    'ULTIMATE NUTRITION': 'Ultimate Nutrition',
+    'NUTREX': 'Nutrex',
+    'AKER': 'Aker',
+    'INSANE LABZ': 'Insane Labz',
+    'GOLD NUTRITION': 'Gold Nutrition',
+    'HOCH SPORT': 'Hoch Sport',
+    'NUTREMAX': 'Nutremax',
+    'FUARK': 'Fuark',
+    'GOMEX NUTRITION': 'Gomex Nutrition',
+    'GRANGER NUTRICION': 'Granger Nutrición',
+    'GRANGER NUTRICIÓN': 'Granger Nutrición',
+    'LA GANEXA': 'La Ganexa',
+    'MAX FORCE': 'Max Force',
+}
+
+
+def load_brands():
+    raw = load_bytes(BRANDS_PATH)
+    if raw:
+        data = json.loads(raw.decode('utf-8'))
+    else:
+        data = {'version': 1, 'aliases': {}, 'ignored': []}
+    data.setdefault('aliases', {})
+    data.setdefault('ignored', [])
+    return data
+
+
+def save_brands(data):
+    save_bytes(
+        BRANDS_PATH,
+        json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'),
+        'Actualizar maestro de marcas',
+    )
+    st.cache_data.clear()
+
+
+def normalize_brand_text(text):
+    return re.sub(r'\s+', ' ', norm_text(text).upper()).strip()
+
+
+def all_aliases(brand_data):
+    aliases = dict(DEFAULT_BRAND_ALIASES)
+    aliases.update(brand_data.get('aliases', {}))
+    return aliases
+
+
+def detect_brand(product, brand_data):
+    text = normalize_brand_text(product)
+    aliases = all_aliases(brand_data)
+    # El alias más largo gana para evitar que ENA capture ENA SPORT.
+    for alias in sorted(aliases, key=len, reverse=True):
+        alias_norm = normalize_brand_text(alias)
+        if alias_norm and alias_norm in text:
+            return aliases[alias], alias, 'Confirmada'
+    return 'Sin identificar', suggest_brand_alias(product), 'Pendiente'
+
+
+def suggest_brand_alias(product):
+    text = normalize_brand_text(product)
+    text = re.sub(r'^\([^)]*\)\s*', '', text)
+    text = re.sub(r'^\d+\s*[-–]\s*', '', text)
+    stop_words = {
+        'WHEY','PROTEIN','PROTEINA','CREATINA','CREATINE','COLLAGEN','COLAGENO',
+        'PRE','WORK','COMBO','OFERTA','SABOR','CHOCOLATE','VAINILLA','FRUTILLA',
+        'SIN','CON','X','GRS','KG','KGS','LBS','COMP','CAPS','TABLETS','UNID'
+    }
+    words = re.findall(r'[A-ZÁÉÍÓÚÑ0-9]+', text)
+    candidate = []
+    for word in words[:4]:
+        if word in stop_words or word.isdigit():
+            break
+        candidate.append(word)
+        if len(candidate) >= 3:
+            break
+    return ' '.join(candidate).title() if candidate else ''
+
+
+def add_brand_columns(df, brand_data):
+    result = df.copy()
+    detected = result['producto'].apply(lambda x: detect_brand(x, brand_data))
+    result['marca'] = detected.apply(lambda x: x[0])
+    result['alias_marca'] = detected.apply(lambda x: x[1])
+    result['estado_marca'] = detected.apply(lambda x: x[2])
+    return result
+
+
+def brand_summary(comp):
+    changed = comp[comp['tipo'] != 'Sin cambio'].copy()
+    if changed.empty:
+        return pd.DataFrame(columns=['marca','productos_modificados','aumentos','bajas','agregados','retirados','aumento_promedio'])
+    rows = []
+    for brand, group in changed.groupby('marca', dropna=False):
+        inc = group[group['tipo'] == 'Aumento']
+        rows.append({
+            'marca': brand or 'Sin identificar',
+            'productos_modificados': len(group),
+            'aumentos': int((group['tipo'] == 'Aumento').sum()),
+            'bajas': int((group['tipo'] == 'Baja').sum()),
+            'agregados': int((group['tipo'] == 'Agregado').sum()),
+            'retirados': int((group['tipo'] == 'Retirado').sum()),
+            'aumento_promedio': inc['variacion_pct'].mean() if len(inc) else None,
+        })
+    return pd.DataFrame(rows).sort_values(['productos_modificados','marca'], ascending=[False,True])
+
+
 def compare_lists(old, new):
     a = old.rename(columns={'producto':'producto_anterior','precio':'precio_anterior'})
     b = new.rename(columns={'producto':'producto_actual','precio':'precio_actual'})
@@ -196,6 +309,11 @@ def compare_lists(old, new):
     m['diferencia'] = m['precio_actual'] - m['precio_anterior']
     m['variacion_pct'] = m.apply(lambda r: r['diferencia']/r['precio_anterior'] if pd.notna(r['precio_anterior']) and r['precio_anterior'] != 0 else None, axis=1)
     m['producto'] = m['producto_actual'].fillna(m['producto_anterior'])
+    brand_data = load_brands()
+    detected = m['producto'].apply(lambda x: detect_brand(x, brand_data))
+    m['marca'] = detected.apply(lambda x: x[0])
+    m['alias_marca'] = detected.apply(lambda x: x[1])
+    m['estado_marca'] = detected.apply(lambda x: x[2])
     return m
 
 
@@ -212,12 +330,13 @@ def report_excel(comp, old_date, new_date):
         ['Retirados', (comp.tipo=='Retirado').sum()],
         ['Aumento promedio', inc.variacion_pct.mean() if len(inc) else 0],
     ], columns=['Dato','Resultado'])
-    cols = ['codigo','producto','precio_anterior','precio_actual','diferencia','variacion_pct','tipo']
+    cols = ['codigo','producto','marca','precio_anterior','precio_actual','diferencia','variacion_pct','tipo']
     with pd.ExcelWriter(out, engine='openpyxl') as w:
         summary.to_excel(w, sheet_name='Resumen', index=False)
         comp[comp.tipo!='Sin cambio'][cols].to_excel(w, sheet_name='Todos los cambios', index=False)
         for kind, sheet in [('Agregado','Agregados'),('Retirado','Retirados'),('Cambio de nombre','Cambios de nombre')]:
             comp[comp.tipo==kind][cols].to_excel(w, sheet_name=sheet, index=False)
+        brand_summary(comp).to_excel(w, sheet_name='Resumen por marca', index=False)
         for ws in w.book.worksheets:
             ws.freeze_panes = 'A2'
             ws.auto_filter.ref = ws.dimensions
@@ -263,13 +382,22 @@ def save_new(index, file_bytes, filename, selected_date, df, replace=False):
 
 
 
-def render_comparison(comp, old_date, new_date, accumulated=False):
+def render_comparison(comp, old_date, new_date, accumulated=False, key_prefix='comparison'):
     old_label = datetime.fromisoformat(old_date).strftime('%d/%m/%Y')
     new_label = datetime.fromisoformat(new_date).strftime('%d/%m/%Y')
     title = f"{old_label} vs. {new_label}"
     if accumulated:
         title += " · Variación acumulada"
     st.subheader(title)
+
+    brands = sorted(x for x in comp['marca'].dropna().unique().tolist())
+    selected_brand = st.selectbox(
+        'Filtrar por marca',
+        ['Todas'] + brands,
+        key=f'{key_prefix}_brand_filter_{old_date}_{new_date}',
+    )
+    if selected_brand != 'Todas':
+        comp = comp[comp['marca'] == selected_brand].copy()
 
     inc = comp[comp.tipo == 'Aumento']
     metrics = [
@@ -302,12 +430,19 @@ def render_comparison(comp, old_date, new_date, accumulated=False):
             st.markdown(f'#### {heading}')
             if len(frame):
                 st.dataframe(
-                    frame[['codigo','producto','precio_anterior','precio_actual','variacion_pct']],
+                    frame[['codigo','producto','marca','precio_anterior','precio_actual','variacion_pct']],
                     use_container_width=True,
                     hide_index=True,
                 )
             else:
                 st.info('No hubo aumentos en esta comparación.')
+
+    st.markdown('#### Resumen por marca')
+    bs = brand_summary(comp)
+    if len(bs):
+        st.dataframe(bs, use_container_width=True, hide_index=True)
+    else:
+        st.info('No hay cambios para resumir por marca.')
 
     for heading, kind in [
         ('Productos que bajaron', 'Baja'),
@@ -328,7 +463,7 @@ def render_comparison(comp, old_date, new_date, accumulated=False):
         report_excel(comp, old_date, new_date),
         f'comparativo_{old_date}_vs_{new_date}.xlsx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        key=f'download_{old_date}_{new_date}_{"acc" if accumulated else "last"}',
+        key=f'{key_prefix}_download_{old_date}_{new_date}',
     )
 
 st.title('📈 Historial de Listas de Precios')
@@ -340,10 +475,10 @@ else:
 
 index = load_index()
 lists = sorted_lists(index)
-tabs = st.tabs(['📤 Nueva lista','📊 Última comparación','🕘 Historial','🔎 Producto'])
+tabs = st.tabs(['📤 Nueva lista','📊 Última comparación','🕘 Historial','🔎 Producto','🏷️ Marcas'])
 
 with tabs[0]:
-    if require_admin():
+    if require_admin('upload'):
         uploaded = st.file_uploader('Subí la lista nueva', type=['xls','xlsx'])
         if uploaded:
             try:
@@ -382,7 +517,7 @@ with tabs[1]:
             load_normalized(old_meta['archivo_normalizado']),
             load_normalized(new_meta['archivo_normalizado'])
         )
-        render_comparison(comp, old_meta['fecha'], new_meta['fecha'], accumulated=False)
+        render_comparison(comp, old_meta['fecha'], new_meta['fecha'], accumulated=False, key_prefix='latest')
 
 with tabs[2]:
     index = load_index(); lists = sorted_lists(index)
@@ -436,17 +571,17 @@ with tabs[2]:
                     new_pos = dates.index(selected_new)
                     accumulated = (new_pos - old_pos) > 1
                     render_comparison(
-                        comp, selected_old, selected_new, accumulated=accumulated
+                        comp, selected_old, selected_new, accumulated=accumulated, key_prefix='history'
                     )
 
 with tabs[3]:
     index = load_index(); lists = sorted_lists(index)
     if not lists: st.info('Todavía no hay productos.')
     else:
-        latest = load_normalized(lists[-1]['archivo_normalizado'])
-        q = st.text_input('Buscá por código o nombre')
+        latest = add_brand_columns(load_normalized(lists[-1]['archivo_normalizado']), load_brands())
+        q = st.text_input('Buscá por código, nombre o marca')
         if q:
-            matches = latest[latest.codigo.str.contains(q,case=False,na=False,regex=False) | latest.producto.str.contains(q,case=False,na=False,regex=False)].head(50)
+            matches = latest[latest.codigo.str.contains(q,case=False,na=False,regex=False) | latest.producto.str.contains(q,case=False,na=False,regex=False) | latest.marca.str.contains(q,case=False,na=False,regex=False)].head(50)
             st.dataframe(matches, use_container_width=True, hide_index=True)
             if len(matches):
                 code = st.selectbox('Elegí un producto', matches.codigo.tolist(), format_func=lambda x: f"{x} — {matches.loc[matches.codigo==x,'producto'].iloc[0]}")
@@ -460,3 +595,82 @@ with tabs[3]:
                     evo['fecha'] = pd.to_datetime(evo.fecha); evo['variacion'] = evo.precio.pct_change()
                     st.line_chart(evo.set_index('fecha').precio)
                     st.dataframe(evo, use_container_width=True, hide_index=True)
+
+with tabs[4]:
+    if require_admin('brands'):
+        st.subheader('Maestro de marcas')
+        st.caption('Confirmás un alias una sola vez y se aplica a todas las listas históricas y futuras.')
+        brand_data = load_brands()
+        aliases = all_aliases(brand_data)
+
+        index = load_index(); lists = sorted_lists(index)
+        if not lists:
+            st.info('Todavía no hay listas para analizar.')
+        else:
+            latest_df = load_normalized(lists[-1]['archivo_normalizado'])
+            classified = add_brand_columns(latest_df, brand_data)
+            pending = classified[classified['marca'] == 'Sin identificar'].copy()
+            pending['alias_sugerido'] = pending['producto'].apply(suggest_brand_alias)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric('Marcas confirmadas', len(set(aliases.values())))
+            c2.metric('Alias confirmados', len(aliases))
+            c3.metric('Productos sin identificar', len(pending))
+
+            st.markdown('#### Marcas por revisar')
+            if pending.empty:
+                st.success('Todos los productos de la última lista tienen una marca identificada.')
+            else:
+                options = pending['codigo'].tolist()
+                selected_code = st.selectbox(
+                    'Elegí un producto pendiente',
+                    options,
+                    format_func=lambda code: f"{code} — {pending.loc[pending.codigo == code, 'producto'].iloc[0]}",
+                )
+                selected_row = pending[pending.codigo == selected_code].iloc[0]
+                st.write(f"**Producto:** {selected_row['producto']}")
+                suggested = selected_row['alias_sugerido'] or ''
+                alias = st.text_input('Alias que aparece en el producto', value=suggested)
+                existing_brands = sorted(set(aliases.values()))
+                choice = st.selectbox('Marca final', existing_brands + ['➕ Crear nueva marca'])
+                if choice == '➕ Crear nueva marca':
+                    final_brand = st.text_input('Nombre de la nueva marca')
+                else:
+                    final_brand = choice
+
+                if st.button('Confirmar alias y marca', type='primary'):
+                    if not alias.strip() or not final_brand.strip():
+                        st.error('Completá el alias y la marca final.')
+                    else:
+                        brand_data['aliases'][normalize_brand_text(alias)] = final_brand.strip()
+                        save_brands(brand_data)
+                        st.success(f'Alias {alias} guardado como {final_brand}.')
+                        st.rerun()
+
+                with st.expander('Ver todos los pendientes'):
+                    st.dataframe(
+                        pending[['codigo','producto','alias_sugerido']],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            st.markdown('#### Alias confirmados')
+            alias_rows = pd.DataFrame(
+                [{'alias': alias, 'marca': brand} for alias, brand in sorted(aliases.items())]
+            )
+            st.dataframe(alias_rows, use_container_width=True, hide_index=True)
+
+            st.markdown('#### Agregar o corregir manualmente')
+            with st.form('manual_brand_alias'):
+                manual_alias = st.text_input('Alias')
+                manual_brand = st.text_input('Marca final')
+                submitted = st.form_submit_button('Guardar alias')
+                if submitted:
+                    if manual_alias.strip() and manual_brand.strip():
+                        brand_data['aliases'][normalize_brand_text(manual_alias)] = manual_brand.strip()
+                        save_brands(brand_data)
+                        st.success('Alias guardado.')
+                        st.rerun()
+                    else:
+                        st.error('Completá ambos campos.')
+
