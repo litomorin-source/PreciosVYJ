@@ -36,6 +36,15 @@
       "productos": 1255,
       "sha256": "f2df0c57919dc1368715d17f0eff529329b49c4dbc576b8322b1ae08b81c73d6",
       "cargado_el": "2026-08-05T16:03:26"
+    },
+    {
+      "fecha": "2026-08-19",
+      "archivo_original": "data/listas/lista_2026-08-19.xls",
+      "archivo_normalizado": "data/normalizados/lista_2026-08-19.csv",
+      "nombre_original": "Listado_de_precios_de_la_listaExclusiva__Venta_200826.xls",
+      "productos": 1158,
+      "sha256": "1619057d7887827cdfa1e8eedf388309e31972fa2b2028f0e71a652fd53642c9",
+      "cargado_el": "2026-08-20T14:31:38"
     }
   ]
 }
