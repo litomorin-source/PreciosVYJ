@@ -81,6 +81,15 @@
       "productos": 1086,
       "sha256": "30ee79adbf229f7a77a9bb7e01f564e96ad11571466773db5ed31174eba893b9",
       "cargado_el": "2026-10-07T12:40:27"
+    },
+    {
+      "fecha": "2026-10-08",
+      "archivo_original": "data/listas/lista_2026-10-08.xls",
+      "archivo_normalizado": "data/normalizados/lista_2026-10-08.csv",
+      "nombre_original": "exclusiva_081026.xls",
+      "productos": 1090,
+      "sha256": "b53e4150b5e27bc3cfde2a2a1b5d2282f0491f63b83d1e6e278791a144147aef",
+      "cargado_el": "2026-10-09T13:01:58"
     }
   ]
 }
