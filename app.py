@@ -2,6 +2,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -199,6 +200,33 @@ def compare_lists(old, new):
     return m
 
 
+def format_price(value):
+    return f'$ {value:,.2f}'.replace(',', '_').replace('.', ',').replace('_', '.')
+
+
+def format_percent(value):
+    if not math.isfinite(value):
+        return "—"
+    if value == 0:
+        return '0,00 %'
+    decimals = 4 if abs(value) < 0.0001 else 2
+    sign = '+' if value > 0 else '−'
+    return f'{sign}{abs(value):.{decimals}%}'.replace('.', ',').replace('%', ' %')
+
+
+def price_table(frame, *, hide_index=True):
+    formatters = {
+        'precio': format_price,
+        'precio_anterior': format_price,
+        'precio_actual': format_price,
+        'diferencia': format_price,
+        'variacion_pct': format_percent,
+        'variacion': format_percent,
+    }
+    styled = frame.style.format(formatters, na_rep='—')
+    st.dataframe(styled, use_container_width=True, hide_index=hide_index)
+
+
 def report_excel(comp, old_date, new_date):
     out = io.BytesIO()
     inc = comp[comp.tipo == 'Aumento']
@@ -287,7 +315,7 @@ with tabs[0]:
                 selected = c2.date_input('¿Este archivo corresponde a esta fecha?', value=detected, format='DD/MM/YYYY')
                 if not dup.empty:
                     st.warning(f'Encontré {dup.codigo.nunique()} códigos duplicados. Se conservará la última aparición.')
-                    with st.expander('Ver duplicados'): st.dataframe(dup, use_container_width=True)
+                    with st.expander('Ver duplicados'): price_table(dup, hide_index=False)
                 existing = by_date(index, selected.isoformat())
                 replace = False
                 if existing:
@@ -314,15 +342,17 @@ with tabs[1]:
         inc = comp[comp.tipo=='Aumento']
         metrics = [('Sin cambios',(comp.tipo=='Sin cambio').sum()),('Aumentos',len(inc)),('Bajas',(comp.tipo=='Baja').sum()),('Agregados',(comp.tipo=='Agregado').sum()),('Retirados',(comp.tipo=='Retirado').sum())]
         for col, (label, val) in zip(st.columns(5), metrics): col.metric(label, int(val))
-        st.write(f"**Aumento promedio:** {inc.variacion_pct.mean() if len(inc) else 0:.2%} · **Mediana:** {inc.variacion_pct.median() if len(inc) else 0:.2%}")
+        average = inc.variacion_pct.mean() if len(inc) else 0
+        median = inc.variacion_pct.median() if len(inc) else 0
+        st.write(f"**Aumento promedio:** {format_percent(average)} · **Mediana:** {format_percent(median)}")
         a,b = st.columns(2)
         for target, title, frame in [(a,'Mayores aumentos',inc.nlargest(10,'variacion_pct')),(b,'Menores aumentos',inc.nsmallest(10,'variacion_pct'))]:
             with target:
                 st.markdown(f'#### {title}')
-                st.dataframe(frame[['codigo','producto','precio_anterior','precio_actual','variacion_pct']], use_container_width=True, hide_index=True)
+                price_table(frame[['codigo','producto','precio_anterior','precio_actual','variacion_pct']])
         for title, kind in [('Productos que bajaron','Baja'),('Productos agregados','Agregado'),('Productos retirados','Retirado'),('Pasaron de $0 a precio','De $0 a precio'),('Cambios de nombre','Cambio de nombre')]:
             sub = comp[comp.tipo==kind]
-            with st.expander(f'{title} ({len(sub)})'): st.dataframe(sub, use_container_width=True, hide_index=True)
+            with st.expander(f'{title} ({len(sub)})'): price_table(sub)
         st.download_button('Descargar Excel comparativo', report_excel(comp, old_meta['fecha'], new_meta['fecha']), f"comparativo_{old_meta['fecha']}_vs_{new_meta['fecha']}.xlsx", 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 with tabs[2]:
@@ -342,7 +372,7 @@ with tabs[2]:
             new_date = c2.selectbox('Lista nueva', valid, format_func=lambda x: datetime.fromisoformat(x).strftime('%d/%m/%Y'))
             if st.button('Comparar fechas seleccionadas'):
                 comp = compare_lists(load_normalized(by_date(index,old_date)['archivo_normalizado']), load_normalized(by_date(index,new_date)['archivo_normalizado']))
-                st.dataframe(comp[comp.tipo!='Sin cambio'], use_container_width=True, hide_index=True)
+                price_table(comp[comp.tipo!='Sin cambio'])
                 st.download_button('Descargar esta comparación', report_excel(comp,old_date,new_date), f'comparativo_{old_date}_vs_{new_date}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 with tabs[3]:
@@ -353,7 +383,7 @@ with tabs[3]:
         q = st.text_input('Buscá por código o nombre')
         if q:
             matches = latest[latest.codigo.str.contains(q,case=False,na=False,regex=False) | latest.producto.str.contains(q,case=False,na=False,regex=False)].head(50)
-            st.dataframe(matches, use_container_width=True, hide_index=True)
+            price_table(matches)
             if len(matches):
                 code = st.selectbox('Elegí un producto', matches.codigo.tolist(), format_func=lambda x: f"{x} — {matches.loc[matches.codigo==x,'producto'].iloc[0]}")
                 evo = []
@@ -365,4 +395,4 @@ with tabs[3]:
                 if len(evo):
                     evo['fecha'] = pd.to_datetime(evo.fecha); evo['variacion'] = evo.precio.pct_change()
                     st.line_chart(evo.set_index('fecha').precio)
-                    st.dataframe(evo, use_container_width=True, hide_index=True)
+                    price_table(evo)
